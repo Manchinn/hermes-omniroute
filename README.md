@@ -52,6 +52,7 @@ hermes://plugin/install?repo=Manchinn/hermes-omniroute&enable=1
 | File | คืออะไร |
 | --- | --- |
 | `plugin.js` | ตัว plugin (ไฟล์เดียว ไม่มี build step) |
+| `plugin.yaml` | Plugin manifest สำหรับ Hermes ecosystem |
 | `README.md` | เอกสารภาษาไทย |
 | `README.en.md` | English documentation |
 | `LICENSE` | MIT License |

@@ -161,6 +161,7 @@ function formatCountdown(resetAt) {
   const diff = target - Date.now()
   if (diff <= 0) return '⏱ รีเซ็ตแล้ว'
   const totalMins = Math.floor(diff / 60000)
+  if (totalMins <= 0) return '⏱ Resets in < 1m'
   const days = Math.floor(totalMins / 1440)
   const hours = Math.floor((totalMins % 1440) / 60)
   const mins = totalMins % 60
@@ -184,7 +185,7 @@ function getQuotaTone(pct) {
 
 function statusBadge(status) {
   if (status === 0) return '🔄'
-  if (status === 200) return '✅'
+  if (status >= 200 && status < 300) return '✅'
   return `❌ ${status}`
 }
 
@@ -341,14 +342,21 @@ export default {
       const [draft, setDraft] = useState('')
       const save = () => {
         const t = draft.trim()
+        if (!t && !cur) return
         if (t && !t.startsWith('oma_')) {
-          host.notify({ kind: 'info', message: 'token ต้องขึ้นต้น oma_' })
-          return
+          host.notify({
+            kind: 'warning',
+            message: 'บันทึกแล้ว (หมายเหตุ: token ไม่ได้ขึ้นต้นด้วย oma_)',
+          })
+        } else {
+          host.notify({
+            kind: 'info',
+            message: t ? 'บันทึก accessToken แล้ว' : 'ลบ accessToken แล้ว',
+          })
         }
         setToken(t)
         setDraft('')
         queryClient.invalidateQueries({ queryKey: [ID] })
-        host.notify({ kind: 'info', message: t ? 'บันทึก accessToken แล้ว' : 'ลบ accessToken แล้ว' })
       }
       return jsx(Section, {
         title: 'OmniRoute accessToken',

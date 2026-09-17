@@ -51,6 +51,7 @@ Enable it in Settings → Plugins → **OmniRoute** (Opt-in by default).
 | File | Description |
 | --- | --- |
 | `plugin.js` | Single-file plugin (Zero build step required) |
+| `plugin.yaml` | Plugin manifest for the Hermes ecosystem |
 | `README.md` | Thai documentation |
 | `README.en.md` | English documentation |
 | `LICENSE` | MIT License |
