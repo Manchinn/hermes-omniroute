@@ -811,13 +811,30 @@ export default {
                       jsx('span', { className: 'text-(--ui-text-tertiary)', children: 'PROVIDER:' }),
                       jsx('select', {
                         value: providerFilter,
-                        onChange: (e) => setProviderFilter(e.target.value),
-                        className: 'rounded border border-(--ui-stroke-secondary) bg-transparent px-1.5 py-0.5 text-xs text-foreground',
+                        onChange: (e) => {
+                          haptic('tap')
+                          setProviderFilter(e.target.value)
+                        },
+                        style: { backgroundColor: '#18181b', color: '#f4f4f5' },
+                        className: 'cursor-pointer rounded border border-(--ui-stroke-secondary) bg-zinc-900 px-2 py-0.5 text-xs text-zinc-100 focus:border-blue-400 focus:outline-none',
                         children: [
-                          jsx('option', { value: 'all', className: 'bg-(--color-bg-subtle)', children: 'All providers' }),
-                          ...providerOptions.map((p) =>
-                            jsx('option', { value: p, className: 'bg-(--color-bg-subtle)', children: p }, p)
-                          ),
+                          jsx('option', {
+                            value: 'all',
+                            style: { backgroundColor: '#18181b', color: '#f4f4f5' },
+                            children: `All providers (${accounts.length})`,
+                          }),
+                          ...providerOptions.map((p) => {
+                            const count = accounts.filter((a) => a.provider === p).length
+                            return jsx(
+                              'option',
+                              {
+                                value: p,
+                                style: { backgroundColor: '#18181b', color: '#f4f4f5' },
+                                children: `${p} (${count})`,
+                              },
+                              p
+                            )
+                          }),
                         ],
                       }),
                     ],
