@@ -1,20 +1,21 @@
 /**
- * OmniRoute Usage — Hermes desktop plugin (Thai UI, read-only).
+ * OmniRoute Usage — Hermes desktop plugin (read-only, i18n EN/TH).
  *
- * แสดง usage summary, quota ต่อ connection, และ recent call logs
- * จาก OmniRoute management API (localhost:20128)
+ * Shows usage summary, provider limits per connection, and recent call logs
+ * from OmniRoute management API (localhost:20128).
  *
  * Surfaces:
- * - statusBar chip: requests / cost สรุป 1d, polls 30s
- * - chip popup: summary 1d + ปุ่มเปิดหน้าเต็ม
- * - page /omniroute: hero summary, quota table, call logs 20 รายการ
+ * - statusBar chip: requests / cost summary 1d, polls 30s
+ * - chip popup: summary 1d + button to open full page
+ * - page /omniroute: hero summary, provider limits table, call logs 20 items
  * - sidebar nav + palette commands
  *
- * Auth: Bearer accessToken จาก OmniRoute config.json
- *       user กรอกใน plugin 1 ครั้ง → เก็บใน ctx.storage
- *       ห้าม hardcode / commit / log ค่า token
+ * Auth: Bearer accessToken from OmniRoute config.json
+ *       Stored securely in ctx.storage
  *
- * Read-only: ไม่เขียน/แก้ config หรือ key ใดๆ ของ OmniRoute
+ * i18n: Spec-compliant ctx.i18n.register({ en, th }) + internal language toggle (auto/en/th).
+ *
+ * Read-only: Does not modify any OmniRoute configurations or keys.
  */
 
 import {
@@ -31,13 +32,13 @@ import {
   queryClient,
   atom,
   useValue,
+  usePluginI18n,
 } from '@hermes/plugin-sdk'
 import { useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const ID = 'omniroute-usage'
 const BASE = 'http://localhost:20128'
-// Split: scheme+secret pattern trips transport redaction
 const AUTH_SCHEME = 'Bear' + 'er'
 
 const USAGE_SUPPORTED_PROVIDERS = [
@@ -87,6 +88,224 @@ const USAGE_SUPPORTED_PROVIDERS = [
 ]
 
 /* ─── helpers ──────────────────────────────────────────── */
+
+/* ─── i18n message bundles ──────────────────────────────── */
+
+const MESSAGES_EN = {
+  chip: {
+    noToken: 'OR: no token',
+    loading: 'OR …',
+    error: 'OR !',
+    tooltip: 'OmniRoute Usage — Click for summary',
+  },
+  popup: {
+    header: 'OmniRoute · Today',
+    needToken: 'Enter accessToken from OmniRoute first',
+    loading: 'Fetching analytics…',
+  },
+  common: {
+    openFull: 'Open full page →',
+    refresh: 'Refresh',
+    refreshed: 'Refreshed OmniRoute',
+    save: 'Save',
+    change: 'Change',
+    delete: 'Delete',
+    loading: 'Loading…',
+    unavailable: 'Unavailable',
+    all: 'All',
+    none: '— none —',
+    copied: 'Copied to clipboard',
+    copyFailed: 'Could not copy',
+    lang: 'Language',
+    langAuto: 'Auto',
+    langEn: 'EN',
+    langTh: 'TH',
+  },
+  hero: {
+    title: "Today's Summary",
+    needToken: 'Enter accessToken below first',
+    loading: 'Loading…',
+    subtitle: 'OmniRoute · Today (1d)',
+    requestsLabel: 'requests',
+    promptTokens: 'prompt tokens',
+    completionTokens: 'completion tokens',
+    totalTokens: 'total tokens',
+    successRate: 'success rate',
+    avgLatency: 'avg latency',
+    uniqueModels: 'unique models',
+    uniqueAccounts: 'unique accounts',
+  },
+  limits: {
+    title: 'Provider Limits',
+    loading: 'Loading Provider Limits…',
+    syncUpstream: '🔄 Sync Upstream',
+    syncing: 'Syncing…',
+    syncSuccess: 'Successfully synced quotas from providers',
+    syncForbidden: '403 Forbidden: Access Token requires write or admin scope to trigger live sync (read-only allowed)',
+    syncFailed: (m) => `Sync quota failed: ${m}`,
+    accountsCount: (n) => `${n} accounts`,
+    total: 'TOTAL',
+    critical: 'CRITICAL',
+    healthy: 'HEALTHY',
+    filterType: 'TYPE:',
+    filterTier: 'TIER:',
+    filterProvider: 'PROVIDER:',
+    typeSub: 'Sub',
+    typeApiKey: 'API Key',
+    tierPro: 'Pro',
+    allProviders: (n) => `All providers (${n})`,
+    noMatch: 'No accounts matching the filter',
+    activeAccounts: (active, total) => `${active} active / ${total} accounts`,
+    tokenExpired: 'Token expired — please re-authenticate',
+    inactive: 'Status: Inactive (disabled)',
+    unlimited: 'Unlimited',
+    left: 'left',
+    quotaBilling: 'Quota: Per billing cycle / Unlimited',
+    resetsDone: '⏱ Reset completed',
+    resetsInMin: '⏱ Resets in < 1m',
+    resetsInDays: (d, h) => `⏱ Resets in ${d}d ${h}h`,
+    resetsInHours: (h, m) => `⏱ Resets in ${h}h ${m}m`,
+    resetsInMins: (m) => `⏱ Resets in ${m}m`,
+  },
+  logs: {
+    title: 'Recent Requests',
+    titleWithCount: (n) => `Recent Requests · ${n}`,
+    empty: 'No requests',
+  },
+  token: {
+    title: 'OmniRoute accessToken',
+    tokenLabel: 'token',
+    hint: 'Create at OmniRoute Dashboard → Settings → Access Tokens (write or admin scope recommended for quota sync)',
+    savedWarning: 'Saved (note: token does not start with oma_)',
+    saved: 'accessToken saved',
+    deleted: 'accessToken deleted',
+  },
+  palette: {
+    openLabel: 'OmniRoute: Open Usage Page',
+    refreshLabel: 'OmniRoute: Refresh Data',
+    clearLabel: 'OmniRoute: Clear accessToken',
+  },
+  errors: {
+    'no-token': 'accessToken not set',
+    network: 'Cannot connect to OmniRoute (is it running?)',
+    'http-401': '401 Invalid or expired token',
+    'http-403': '403 Permission denied',
+    'http-404': '404 Path not found',
+    'http-500': '500 Server error',
+  },
+}
+
+const MESSAGES_TH = {
+  chip: {
+    noToken: 'OR: ไม่มี token',
+    loading: 'OR …',
+    error: 'OR !',
+    tooltip: 'OmniRoute Usage — กดดูสรุป',
+  },
+  popup: {
+    header: 'OmniRoute · วันนี้',
+    needToken: 'ใส่ accessToken จาก OmniRoute ก่อน',
+    loading: 'กำลังดึง analytics…',
+  },
+  common: {
+    openFull: 'เปิดหน้าเต็ม →',
+    refresh: 'รีเฟรช',
+    refreshed: 'รีเฟรช OmniRoute แล้ว',
+    save: 'บันทึก',
+    change: 'เปลี่ยน',
+    delete: 'ลบ',
+    loading: 'กำลังโหลด…',
+    unavailable: 'ดูไม่ได้',
+    all: 'ทั้งหมด',
+    none: '— ยังไม่มี —',
+    copied: 'คัดลอกลงคลิปบอร์ดแล้ว',
+    copyFailed: 'คัดลอกไม่สำเร็จ',
+    lang: 'ภาษา',
+    langAuto: 'อัตโนมัติ',
+    langEn: 'EN',
+    langTh: 'TH',
+  },
+  hero: {
+    title: 'สรุปวันนี้',
+    needToken: 'ใส่ accessToken ด้านล่างก่อน',
+    loading: 'กำลังโหลด…',
+    subtitle: 'OmniRoute · วันนี้ (1d)',
+    requestsLabel: 'requests',
+    promptTokens: 'prompt tokens',
+    completionTokens: 'completion tokens',
+    totalTokens: 'total tokens',
+    successRate: 'success rate',
+    avgLatency: 'avg latency',
+    uniqueModels: 'unique models',
+    uniqueAccounts: 'unique accounts',
+  },
+  limits: {
+    title: 'Provider Limits',
+    loading: 'กำลังโหลด Provider Limits…',
+    syncUpstream: '🔄 Sync Upstream',
+    syncing: 'กำลัง Sync…',
+    syncSuccess: 'Sync โควต้าจาก Provider สำเร็จแล้ว',
+    syncForbidden: '403 สิทธิ์ไม่พอ: Access Token ต้องมี Scope write หรือ admin เพื่อกด Sync สด (ดูได้เฉพาะ read)',
+    syncFailed: (m) => `Sync โควต้าไม่สำเร็จ: ${m}`,
+    accountsCount: (n) => `${n} บัญชี`,
+    total: 'TOTAL',
+    critical: 'CRITICAL',
+    healthy: 'HEALTHY',
+    filterType: 'TYPE:',
+    filterTier: 'TIER:',
+    filterProvider: 'PROVIDER:',
+    typeSub: 'Sub',
+    typeApiKey: 'API Key',
+    tierPro: 'Pro',
+    allProviders: (n) => `All providers (${n})`,
+    noMatch: 'ไม่พบบัญชีที่ตรงกับเงื่อนไข',
+    activeAccounts: (active, total) => `${active} active / ${total} accounts`,
+    tokenExpired: 'Token expired — กรุณา re-authenticate',
+    inactive: 'สถานะ: Inactive (ปิดใช้งานอยู่)',
+    unlimited: 'ไม่จำกัด',
+    left: 'left',
+    quotaBilling: 'โควต้า: ตามรอบบิล / ไม่จำกัด',
+    resetsDone: '⏱ รีเซ็ตแล้ว',
+    resetsInMin: '⏱ Resets in < 1m',
+    resetsInDays: (d, h) => `⏱ Resets in ${d}d ${h}h`,
+    resetsInHours: (h, m) => `⏱ Resets in ${h}h ${m}m`,
+    resetsInMins: (m) => `⏱ Resets in ${m}m`,
+  },
+  logs: {
+    title: 'Recent Requests',
+    titleWithCount: (n) => `Recent Requests · ${n}`,
+    empty: 'ไม่มี request',
+  },
+  token: {
+    title: 'OmniRoute accessToken',
+    tokenLabel: 'token',
+    hint: 'สร้างที่ OmniRoute Dashboard → Settings → Access Tokens (แนะนำ Scope write หรือ admin เพื่อให้กดปุ่ม Sync โควต้าได้)',
+    savedWarning: 'บันทึกแล้ว (หมายเหตุ: token ไม่ได้ขึ้นต้นด้วย oma_)',
+    saved: 'บันทึก accessToken แล้ว',
+    deleted: 'ลบ accessToken แล้ว',
+  },
+  palette: {
+    openLabel: 'OmniRoute: เปิดหน้า Usage',
+    refreshLabel: 'OmniRoute: รีเฟรชข้อมูล',
+    clearLabel: 'OmniRoute: ลบ accessToken',
+  },
+  errors: {
+    'no-token': 'ยังไม่ได้ตั้ง accessToken',
+    network: 'ต่อ OmniRoute ไม่ได้ (ปิดอยู่?)',
+    'http-401': '401 token ผิด/หมดอายุ',
+    'http-403': '403 สิทธิ์ไม่พอ',
+    'http-404': '404 path ผิด',
+    'http-500': '500 server error',
+  },
+}
+
+function resolveMsg(dict, key, args = []) {
+  if (!dict) return null
+  const val = key.split('.').reduce((acc, part) => (acc && typeof acc === 'object' ? acc[part] : undefined), dict)
+  if (typeof val === 'string') return val
+  if (typeof val === 'function') return val(...args)
+  return null
+}
 
 function fmtUsd(n) {
   return typeof n === 'number' && Number.isFinite(n) ? `$${n.toFixed(2)}` : '—'
@@ -154,11 +373,22 @@ function formatModelName(model) {
     .replace(/\b(Gpt|O1|O3|Oss|Api|Sdk|Llm)\b/gi, (m) => m.toUpperCase())
 }
 
-function formatCountdown(resetAt) {
+function formatCountdown(resetAt, t) {
   if (!resetAt) return null
   const target = new Date(resetAt).getTime()
   if (Number.isNaN(target)) return null
   const diff = target - Date.now()
+  if (t) {
+    if (diff <= 0) return t('limits.resetsDone')
+    const totalMins = Math.floor(diff / 60000)
+    if (totalMins <= 0) return t('limits.resetsInMin')
+    const days = Math.floor(totalMins / 1440)
+    const hours = Math.floor((totalMins % 1440) / 60)
+    const mins = totalMins % 60
+    if (days > 0) return t('limits.resetsInDays', days, hours)
+    if (hours > 0) return t('limits.resetsInHours', hours, mins)
+    return t('limits.resetsInMins', mins)
+  }
   if (diff <= 0) return '⏱ รีเซ็ตแล้ว'
   const totalMins = Math.floor(diff / 60000)
   if (totalMins <= 0) return '⏱ Resets in < 1m'
@@ -169,6 +399,8 @@ function formatCountdown(resetAt) {
   if (hours > 0) return `⏱ Resets in ${hours}h ${mins}m`
   return `⏱ Resets in ${mins}m`
 }
+
+const ERR_TH = MESSAGES_TH.errors
 
 function getQuotaTone(pct) {
   if (pct == null || !Number.isFinite(pct)) {
@@ -187,15 +419,6 @@ function statusBadge(status) {
   if (status === 0) return '🔄'
   if (status >= 200 && status < 300) return '✅'
   return `❌ ${status}`
-}
-
-const ERR_TH = {
-  'no-token': 'ยังไม่ได้ตั้ง accessToken',
-  network: 'ต่อ OmniRoute ไม่ได้ (ปิดอยู่?)',
-  'http-401': '401 token ผิด/หมดอายุ',
-  'http-403': '403 สิทธิ์ไม่พอ',
-  'http-404': '404 path ผิด',
-  'http-500': '500 server error',
 }
 
 function errKey(err) {
@@ -243,12 +466,56 @@ export default {
   name: 'OmniRoute Usage',
   defaultEnabled: false,
   register(ctx) {
+    // 1. Register i18n bundles with core runtime
+    ctx.i18n.register({ en: MESSAGES_EN, th: MESSAGES_TH })
+
+    // 2. Storage atoms
     const $token = atom(ctx.storage.get('or_token', ''))
+    const $lang = atom(ctx.storage.get('lang', 'auto')) // 'auto' | 'en' | 'th'
 
     function setToken(t) {
       if (t) ctx.storage.set('or_token', t)
       else ctx.storage.remove('or_token')
       $token.set(t)
+    }
+
+    function setLang(l) {
+      if (l && l !== 'auto') ctx.storage.set('lang', l)
+      else ctx.storage.remove('lang')
+      $lang.set(l || 'auto')
+    }
+
+    // 3. React hook translator
+    function useT() {
+      const appT = usePluginI18n(ID)
+      const userLang = useValue($lang)
+      return (key, ...args) => {
+        if (userLang === 'th') {
+          return resolveMsg(MESSAGES_TH, key, args) ?? resolveMsg(MESSAGES_EN, key, args) ?? key
+        }
+        if (userLang === 'en') {
+          return resolveMsg(MESSAGES_EN, key, args) ?? key
+        }
+        // 'auto': app translator first (supports any app locale, fallback to en)
+        return appT(key, ...args)
+      }
+    }
+
+    // 4. Module-level translator
+    function t(key, ...args) {
+      const userLang = $lang.get()
+      if (userLang === 'th') {
+        return resolveMsg(MESSAGES_TH, key, args) ?? resolveMsg(MESSAGES_EN, key, args) ?? key
+      }
+      if (userLang === 'en') {
+        return resolveMsg(MESSAGES_EN, key, args) ?? key
+      }
+      return ctx.i18n.t(key, ...args)
+    }
+
+    function getErrorMessage(err, translator) {
+      const k = errKey(err)
+      return translator(`errors.${k}`) || translator('common.unavailable')
     }
 
     /* ─── fetch helpers ───────────────────────────────── */
@@ -335,38 +602,85 @@ export default {
       })
     }
 
+    /* ─── language switch UI ─────────────────────────── */
+
+    function LangSwitch() {
+      const lang = useValue($lang)
+      const tr = useT()
+      return jsxs('div', {
+        className: 'flex items-center gap-0.5 rounded-sm border border-(--ui-stroke-secondary) p-0.5 text-xs',
+        children: [
+          jsx('button', {
+            type: 'button',
+            onClick: () => {
+              haptic('tap')
+              setLang('auto')
+            },
+            className: `rounded px-1.5 py-0.5 text-[0.6875rem] transition-colors ${
+              lang === 'auto' ? 'bg-blue-500/20 text-blue-300 font-medium' : 'text-(--ui-text-tertiary) hover:text-foreground'
+            }`,
+            title: 'Auto (Follow App Language)',
+            children: tr('common.langAuto'),
+          }),
+          jsx('button', {
+            type: 'button',
+            onClick: () => {
+              haptic('tap')
+              setLang('en')
+            },
+            className: `rounded px-1.5 py-0.5 text-[0.6875rem] transition-colors ${
+              lang === 'en' ? 'bg-blue-500/20 text-blue-300 font-medium' : 'text-(--ui-text-tertiary) hover:text-foreground'
+            }`,
+            children: tr('common.langEn'),
+          }),
+          jsx('button', {
+            type: 'button',
+            onClick: () => {
+              haptic('tap')
+              setLang('th')
+            },
+            className: `rounded px-1.5 py-0.5 text-[0.6875rem] transition-colors ${
+              lang === 'th' ? 'bg-blue-500/20 text-blue-300 font-medium' : 'text-(--ui-text-tertiary) hover:text-foreground'
+            }`,
+            children: tr('common.langTh'),
+          }),
+        ],
+      })
+    }
+
     /* ─── token input ─────────────────────────────────── */
 
     function TokenSection() {
       const cur = useValue($token)
       const [draft, setDraft] = useState('')
+      const tr = useT()
       const save = () => {
-        const t = draft.trim()
-        if (!t && !cur) return
-        if (t && !t.startsWith('oma_')) {
+        const str = draft.trim()
+        if (!str && !cur) return
+        if (str && !str.startsWith('oma_')) {
           host.notify({
             kind: 'warning',
-            message: 'บันทึกแล้ว (หมายเหตุ: token ไม่ได้ขึ้นต้นด้วย oma_)',
+            message: tr('token.savedWarning'),
           })
         } else {
           host.notify({
             kind: 'info',
-            message: t ? 'บันทึก accessToken แล้ว' : 'ลบ accessToken แล้ว',
+            message: str ? tr('token.saved') : tr('token.deleted'),
           })
         }
-        setToken(t)
+        setToken(str)
         setDraft('')
         queryClient.invalidateQueries({ queryKey: [ID] })
       }
       return jsx(Section, {
-        title: 'OmniRoute accessToken',
+        title: tr('token.title'),
         children: jsxs('div', {
           className: 'flex flex-col gap-1.5',
           children: [
-            jsx(Row, { label: 'token', value: cur ? maskToken(cur) : '— ยังไม่มี —' }),
+            jsx(Row, { label: tr('token.tokenLabel'), value: cur ? maskToken(cur) : tr('common.none') }),
             jsx('div', {
               className: 'text-xs text-(--ui-text-tertiary)',
-              children: 'สร้างที่ OmniRoute Dashboard → Settings → Access Tokens (แนะนำ Scope write หรือ admin เพื่อให้กดปุ่ม Sync โควต้าได้)',
+              children: tr('token.hint'),
             }),
             jsxs('div', {
               className: 'flex gap-1.5',
@@ -378,14 +692,18 @@ export default {
                   autoComplete: 'off',
                   placeholder: 'oma_…',
                   onChange: (e) => setDraft(e.target.value),
-                  onKeyDown: (e) => { if (e.key === 'Enter') save() },
-                  className: 'min-w-0 flex-1 rounded-sm border border-(--ui-stroke-secondary) bg-transparent px-1.5 py-1 font-mono text-xs',
+                  onKeyDown: (e) => {
+                    if (e.key === 'Enter') save()
+                  },
+                  className:
+                    'min-w-0 flex-1 rounded-sm border border-(--ui-stroke-secondary) bg-transparent px-1.5 py-1 font-mono text-xs',
                 }),
                 jsx('button', {
                   type: 'button',
                   onClick: save,
-                  className: 'shrink-0 rounded-sm border border-(--ui-stroke-secondary) px-2 py-1 text-xs hover:bg-(--chrome-action-hover)',
-                  children: cur ? 'เปลี่ยน' : 'บันทึก',
+                  className:
+                    'shrink-0 rounded-sm border border-(--ui-stroke-secondary) px-2 py-1 text-xs hover:bg-(--chrome-action-hover)',
+                  children: cur ? tr('common.change') : tr('common.save'),
                 }),
                 cur
                   ? jsx('button', {
@@ -394,10 +712,11 @@ export default {
                         setToken('')
                         setDraft('')
                         queryClient.invalidateQueries({ queryKey: [ID] })
-                        host.notify({ kind: 'info', message: 'ลบ accessToken แล้ว' })
+                        host.notify({ kind: 'info', message: tr('token.deleted') })
                       },
-                      className: 'shrink-0 rounded-sm border border-(--ui-stroke-secondary) px-2 py-1 text-xs hover:bg-(--chrome-action-hover)',
-                      children: 'ลบ',
+                      className:
+                        'shrink-0 rounded-sm border border-(--ui-stroke-secondary) px-2 py-1 text-xs hover:bg-(--chrome-action-hover)',
+                      children: tr('common.delete'),
                     })
                   : null,
               ],
@@ -412,6 +731,7 @@ export default {
     function ChipPopup() {
       const token = useValue($token)
       const q = useAnalytics()
+      const tr = useT()
       const refresh = () => {
         haptic('tap')
         queryClient.invalidateQueries({ queryKey: [ID] })
@@ -426,14 +746,16 @@ export default {
           jsx('button', {
             type: 'button',
             onClick: openFull,
-            className: 'flex-1 rounded-sm border border-(--ui-stroke-secondary) px-2 py-1 text-xs hover:bg-(--chrome-action-hover)',
-            children: 'เปิดหน้าเต็ม →',
+            className:
+              'flex-1 rounded-sm border border-(--ui-stroke-secondary) px-2 py-1 text-xs hover:bg-(--chrome-action-hover)',
+            children: tr('common.openFull'),
           }),
           jsx('button', {
             type: 'button',
             onClick: refresh,
-            className: 'shrink-0 rounded-sm border border-(--ui-stroke-secondary) px-2 py-1 text-xs hover:bg-(--chrome-action-hover)',
-            children: 'รีเฟรช',
+            className:
+              'shrink-0 rounded-sm border border-(--ui-stroke-secondary) px-2 py-1 text-xs hover:bg-(--chrome-action-hover)',
+            children: tr('common.refresh'),
           }),
         ],
       })
@@ -442,7 +764,7 @@ export default {
         return jsxs('div', {
           className: 'flex flex-col gap-1.5',
           children: [
-            jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children: 'ใส่ accessToken จาก OmniRoute ก่อน' }),
+            jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children: tr('popup.needToken') }),
             footer,
           ],
         })
@@ -451,7 +773,7 @@ export default {
         return jsxs('div', {
           className: 'flex flex-col gap-1.5',
           children: [
-            jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children: 'กำลังดึง analytics…' }),
+            jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children: tr('popup.loading') }),
             footer,
           ],
         })
@@ -460,7 +782,7 @@ export default {
         return jsxs('div', {
           className: 'flex flex-col gap-1.5',
           children: [
-            jsx('div', { className: 'text-sm', children: ERR_TH[errKey(q.error)] || 'ดูไม่ได้' }),
+            jsx('div', { className: 'text-sm', children: getErrorMessage(q.error, tr) }),
             footer,
           ],
         })
@@ -474,7 +796,7 @@ export default {
           jsxs('div', {
             className: 'flex flex-col gap-0.5',
             children: [
-              jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children: 'OmniRoute · วันนี้' }),
+              jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children: tr('popup.header') }),
               jsx('div', {
                 style: { fontSize: 22, fontWeight: 650, lineHeight: 1.15 },
                 className: 'font-mono tabular-nums',
@@ -501,13 +823,14 @@ export default {
     function Chip() {
       const token = useValue($token)
       const q = useAnalytics()
-      let label = 'OR: ไม่มี token'
+      const tr = useT()
+      let label = tr('chip.noToken')
       if (token) {
         if (q.data) {
           const s = q.data.summary || {}
           label = `OR ${s.totalRequests ?? '?'} req · ${fmtUsd(s.totalCost)}`
-        } else if (q.isLoading) label = 'OR …'
-        else if (q.error) label = 'OR !'
+        } else if (q.isLoading) label = tr('chip.loading')
+        else if (q.error) label = tr('chip.error')
       }
       return jsxs(Popover, {
         children: [
@@ -515,8 +838,9 @@ export default {
             asChild: true,
             children: jsx('button', {
               type: 'button',
-              title: 'OmniRoute Usage — กดดูสรุป',
-              className: 'inline-flex h-full items-center gap-1 px-1.5 text-[0.6875rem] text-(--ui-text-tertiary) transition-colors hover:bg-(--chrome-action-hover) hover:text-foreground',
+              title: tr('chip.tooltip'),
+              className:
+                'inline-flex h-full items-center gap-1 px-1.5 text-[0.6875rem] text-(--ui-text-tertiary) transition-colors hover:bg-(--chrome-action-hover) hover:text-foreground',
               onClick: () => haptic('tap'),
               children: label,
             }),
@@ -538,49 +862,57 @@ export default {
     function HeroSection() {
       const token = useValue($token)
       const q = useAnalytics()
+      const tr = useT()
       if (!token) {
         return jsx(Section, {
-          title: 'สรุปวันนี้',
-          children: jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children: 'ใส่ accessToken ด้านล่างก่อน' }),
+          title: tr('hero.title'),
+          children: jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children: tr('hero.needToken') }),
         })
       }
       if (q.isLoading) {
-        return jsx(Section, { title: 'สรุปวันนี้', children: jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children: 'กำลังโหลด…' }) })
+        return jsx(Section, {
+          title: tr('hero.title'),
+          children: jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children: tr('hero.loading') }),
+        })
       }
       if (q.error) {
-        return jsx(Section, { title: 'สรุปวันนี้', children: jsx('div', { className: 'text-sm', children: ERR_TH[errKey(q.error)] || 'ดูไม่ได้' }) })
+        return jsx(Section, {
+          title: tr('hero.title'),
+          children: jsx('div', { className: 'text-sm', children: getErrorMessage(q.error, tr) }),
+        })
       }
       const s = (q.data && q.data.summary) || {}
       return jsxs('div', {
         className: 'flex flex-col gap-0.5 rounded-md border border-(--ui-stroke-secondary) p-3',
         children: [
-          jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children: 'OmniRoute · วันนี้ (1d)' }),
+          jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children: tr('hero.subtitle') }),
           jsx('div', {
             style: { fontSize: 26, fontWeight: 650, lineHeight: 1.15 },
             className: 'font-mono tabular-nums',
-            children: `${s.totalRequests ?? '—'} requests · ${fmtUsd(s.totalCost)}`,
+            children: `${s.totalRequests ?? '—'} ${tr('hero.requestsLabel')} · ${fmtUsd(s.totalCost)}`,
           }),
           jsxs('div', {
             className: 'mt-1 flex flex-col gap-0.5',
             children: [
-              jsx(Row, { label: 'prompt tokens', value: fmtTokens(s.promptTokens) }),
-              jsx(Row, { label: 'completion tokens', value: fmtTokens(s.completionTokens) }),
-              jsx(Row, { label: 'total tokens', value: fmtTokens(s.totalTokens) }),
-              jsx(Row, { label: 'success rate', value: fmtPct(s.successRatePct) }),
-              jsx(Row, { label: 'avg latency', value: fmtMs(s.avgLatencyMs) }),
-              jsx(Row, { label: 'unique models', value: String(s.uniqueModels ?? '—') }),
-              jsx(Row, { label: 'unique accounts', value: String(s.uniqueAccounts ?? '—') }),
+              jsx(Row, { label: tr('hero.promptTokens'), value: fmtTokens(s.promptTokens) }),
+              jsx(Row, { label: tr('hero.completionTokens'), value: fmtTokens(s.completionTokens) }),
+              jsx(Row, { label: tr('hero.totalTokens'), value: fmtTokens(s.totalTokens) }),
+              jsx(Row, { label: tr('hero.successRate'), value: fmtPct(s.successRatePct) }),
+              jsx(Row, { label: tr('hero.avgLatency'), value: fmtMs(s.avgLatencyMs) }),
+              jsx(Row, { label: tr('hero.uniqueModels'), value: String(s.uniqueModels ?? '—') }),
+              jsx(Row, { label: tr('hero.uniqueAccounts'), value: String(s.uniqueAccounts ?? '—') }),
             ],
           }),
         ],
       })
     }
 
-    /* ─── provider limits section (UI ใหม่แทน Quota แบบเดิม) ─── */
+    /* ─── provider limits section ─────────────────────── */
 
     function ProviderLimitsSection() {
       const token = useValue($token)
       const q = useProviderLimits()
+      const tr = useT()
       const [typeFilter, setTypeFilter] = useState('all') // 'all' | 'subscription' | 'apikey'
       const [tierFilter, setTierFilter] = useState('all') // 'all' | 'pro' | 'free'
       const [providerFilter, setProviderFilter] = useState('all')
@@ -592,16 +924,16 @@ export default {
         try {
           await apiPost('/api/usage/provider-limits')
           await queryClient.invalidateQueries({ queryKey: [ID, 'provider-limits'] })
-          host.notify({ kind: 'info', message: 'Sync โควต้าจาก Provider สำเร็จแล้ว' })
+          host.notify({ kind: 'info', message: tr('limits.syncSuccess') })
         } catch (err) {
           const m = String(err?.message || err)
           if (m.includes('403')) {
             host.notify({
               kind: 'error',
-              message: '403 สิทธิ์ไม่พอ: Access Token ต้องมี Scope write หรือ admin เพื่อกด Sync สด (ดูได้เฉพาะ read)',
+              message: tr('limits.syncForbidden'),
             })
           } else {
-            host.notify({ kind: 'error', message: 'Sync โควต้าไม่สำเร็จ: ' + m })
+            host.notify({ kind: 'error', message: tr('limits.syncFailed', m) })
           }
           queryClient.invalidateQueries({ queryKey: [ID, 'provider-limits'] })
         } finally {
@@ -613,22 +945,21 @@ export default {
 
       if (q.isLoading) {
         return jsx(Section, {
-          title: 'Provider Limits',
-          children: jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children: 'กำลังโหลด Provider Limits…' }),
+          title: tr('limits.title'),
+          children: jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children: tr('limits.loading') }),
         })
       }
 
       if (q.error) {
         return jsx(Section, {
-          title: 'Provider Limits',
-          children: jsx('div', { className: 'text-sm', children: ERR_TH[errKey(q.error)] || 'ดูไม่ได้' }),
+          title: tr('limits.title'),
+          children: jsx('div', { className: 'text-sm', children: getErrorMessage(q.error, tr) }),
         })
       }
 
       const caches = q.data?.caches || {}
       const connections = q.data?.connections || []
 
-      // รวมและกรองเฉพาะ Connection ที่มี Quota หรืออยู่ใน USAGE_SUPPORTED_PROVIDERS
       const accounts = connections
         .filter((c) => {
           const hasCache = !!caches[c.id]
@@ -644,7 +975,6 @@ export default {
           const quotas = cache.quotas || {}
           const modelEntries = Object.entries(quotas)
 
-          // ประเมินสถานะ account
           let isCritical = c.testStatus === 'expired' || !!c.lastError
           let isWarning = false
           for (const [, qObj] of modelEntries) {
@@ -672,10 +1002,8 @@ export default {
           }
         })
 
-      // Providers list สำหรับ Filter dropdown
       const providerOptions = Array.from(new Set(accounts.map((a) => a.provider)))
 
-      // Filtering
       const filtered = accounts.filter((a) => {
         if (typeFilter === 'subscription' && a.authType !== 'oauth') return false
         if (typeFilter === 'apikey' && a.authType !== 'apikey') return false
@@ -685,12 +1013,10 @@ export default {
         return true
       })
 
-      // สถิติ KPI
       const totalCount = accounts.length
       const criticalCount = accounts.filter((a) => a.isCritical).length
       const okCount = accounts.filter((a) => !a.isCritical && !a.isWarning).length
 
-      // จัดกลุ่มตาม Provider
       const grouped = filtered.reduce((acc, accObj) => {
         acc[accObj.provider] = acc[accObj.provider] || []
         acc[accObj.provider].push(accObj)
@@ -707,10 +1033,13 @@ export default {
               jsxs('div', {
                 className: 'flex items-center gap-2',
                 children: [
-                  jsx('div', { className: 'text-xs font-semibold uppercase tracking-wider text-blue-400', children: 'Provider Limits' }),
+                  jsx('div', {
+                    className: 'text-xs font-semibold uppercase tracking-wider text-blue-400',
+                    children: tr('limits.title'),
+                  }),
                   jsx('span', {
                     className: 'rounded-full bg-blue-500/20 px-2 py-0.5 text-[0.6875rem] font-medium text-blue-300',
-                    children: `${filtered.length} accounts`,
+                    children: tr('limits.accountsCount', filtered.length),
                   }),
                 ],
               }),
@@ -718,8 +1047,9 @@ export default {
                 type: 'button',
                 disabled: syncing,
                 onClick: handleSyncUpstream,
-                className: 'flex items-center gap-1 rounded-sm border border-(--ui-stroke-secondary) px-2 py-0.5 text-xs hover:bg-(--chrome-action-hover) disabled:opacity-50',
-                children: syncing ? 'กำลัง Sync…' : '🔄 Sync Upstream',
+                className:
+                  'flex items-center gap-1 rounded-sm border border-(--ui-stroke-secondary) px-2 py-0.5 text-xs hover:bg-(--chrome-action-hover) disabled:opacity-50',
+                children: syncing ? tr('limits.syncing') : tr('limits.syncUpstream'),
               }),
             ],
           }),
@@ -729,19 +1059,27 @@ export default {
             className: 'grid grid-cols-3 gap-2',
             children: [
               jsxs('div', {
-                className: 'flex flex-col rounded-sm border border-(--ui-stroke-secondary) bg-(--chrome-action-hover) p-2',
+                className:
+                  'flex flex-col rounded-sm border border-(--ui-stroke-secondary) bg-(--chrome-action-hover) p-2',
                 children: [
-                  jsx('span', { className: 'text-[0.625rem] font-semibold text-(--ui-text-tertiary)', children: 'TOTAL' }),
+                  jsx('span', {
+                    className: 'text-[0.625rem] font-semibold text-(--ui-text-tertiary)',
+                    children: tr('limits.total'),
+                  }),
                   jsx('span', { className: 'text-lg font-bold font-mono', children: String(totalCount) }),
                 ],
               }),
               jsxs('div', {
-                className: 'flex flex-col rounded-sm border border-(--ui-stroke-secondary) bg-(--chrome-action-hover) p-2',
+                className:
+                  'flex flex-col rounded-sm border border-(--ui-stroke-secondary) bg-(--chrome-action-hover) p-2',
                 children: [
                   jsxs('div', {
                     className: 'flex items-center justify-between',
                     children: [
-                      jsx('span', { className: 'text-[0.625rem] font-semibold text-(--ui-text-tertiary)', children: 'CRITICAL' }),
+                      jsx('span', {
+                        className: 'text-[0.625rem] font-semibold text-(--ui-text-tertiary)',
+                        children: tr('limits.critical'),
+                      }),
                       criticalCount > 0 ? jsx('span', { className: 'h-2 w-2 rounded-full bg-red-500' }) : null,
                     ],
                   }),
@@ -749,9 +1087,13 @@ export default {
                 ],
               }),
               jsxs('div', {
-                className: 'flex flex-col rounded-sm border border-(--ui-stroke-secondary) bg-(--chrome-action-hover) p-2',
+                className:
+                  'flex flex-col rounded-sm border border-(--ui-stroke-secondary) bg-(--chrome-action-hover) p-2',
                 children: [
-                  jsx('span', { className: 'text-[0.625rem] font-semibold text-(--ui-text-tertiary)', children: 'HEALTHY' }),
+                  jsx('span', {
+                    className: 'text-[0.625rem] font-semibold text-(--ui-text-tertiary)',
+                    children: tr('limits.healthy'),
+                  }),
                   jsx('span', { className: 'text-lg font-bold font-mono text-emerald-400', children: String(okCount) }),
                 ],
               }),
@@ -760,47 +1102,68 @@ export default {
 
           // ─── Filters Bar ───
           jsxs('div', {
-            className: 'flex flex-wrap items-center gap-3 border-y border-(--ui-stroke-secondary) py-1.5 text-xs',
+            className:
+              'flex flex-wrap items-center gap-3 border-y border-(--ui-stroke-secondary) py-1.5 text-xs',
             children: [
               jsxs('div', {
                 className: 'flex items-center gap-1',
                 children: [
-                  jsx('span', { className: 'text-(--ui-text-tertiary)', children: 'TYPE:' }),
+                  jsx('span', { className: 'text-(--ui-text-tertiary)', children: tr('limits.filterType') }),
                   jsx('button', {
                     type: 'button',
                     onClick: () => setTypeFilter('all'),
-                    className: `rounded px-1.5 py-0.5 ${typeFilter === 'all' ? 'bg-blue-500/20 text-blue-300 font-medium' : 'text-(--ui-text-tertiary) hover:text-foreground'}`,
-                    children: `All ${accounts.length}`,
+                    className: `rounded px-1.5 py-0.5 ${
+                      typeFilter === 'all'
+                        ? 'bg-blue-500/20 text-blue-300 font-medium'
+                        : 'text-(--ui-text-tertiary) hover:text-foreground'
+                    }`,
+                    children: `${tr('common.all')} ${accounts.length}`,
                   }),
                   jsx('button', {
                     type: 'button',
                     onClick: () => setTypeFilter('subscription'),
-                    className: `rounded px-1.5 py-0.5 ${typeFilter === 'subscription' ? 'bg-blue-500/20 text-blue-300 font-medium' : 'text-(--ui-text-tertiary) hover:text-foreground'}`,
-                    children: 'Sub',
+                    className: `rounded px-1.5 py-0.5 ${
+                      typeFilter === 'subscription'
+                        ? 'bg-blue-500/20 text-blue-300 font-medium'
+                        : 'text-(--ui-text-tertiary) hover:text-foreground'
+                    }`,
+                    children: tr('limits.typeSub'),
                   }),
                   jsx('button', {
                     type: 'button',
                     onClick: () => setTypeFilter('apikey'),
-                    className: `rounded px-1.5 py-0.5 ${typeFilter === 'apikey' ? 'bg-blue-500/20 text-blue-300 font-medium' : 'text-(--ui-text-tertiary) hover:text-foreground'}`,
-                    children: 'API Key',
+                    className: `rounded px-1.5 py-0.5 ${
+                      typeFilter === 'apikey'
+                        ? 'bg-blue-500/20 text-blue-300 font-medium'
+                        : 'text-(--ui-text-tertiary) hover:text-foreground'
+                    }`,
+                    children: tr('limits.typeApiKey'),
                   }),
                 ],
               }),
               jsxs('div', {
                 className: 'flex items-center gap-1',
                 children: [
-                  jsx('span', { className: 'text-(--ui-text-tertiary)', children: 'TIER:' }),
+                  jsx('span', { className: 'text-(--ui-text-tertiary)', children: tr('limits.filterTier') }),
                   jsx('button', {
                     type: 'button',
                     onClick: () => setTierFilter('all'),
-                    className: `rounded px-1.5 py-0.5 ${tierFilter === 'all' ? 'bg-blue-500/20 text-blue-300 font-medium' : 'text-(--ui-text-tertiary) hover:text-foreground'}`,
-                    children: 'All',
+                    className: `rounded px-1.5 py-0.5 ${
+                      tierFilter === 'all'
+                        ? 'bg-blue-500/20 text-blue-300 font-medium'
+                        : 'text-(--ui-text-tertiary) hover:text-foreground'
+                    }`,
+                    children: tr('common.all'),
                   }),
                   jsx('button', {
                     type: 'button',
                     onClick: () => setTierFilter('pro'),
-                    className: `rounded px-1.5 py-0.5 ${tierFilter === 'pro' ? 'bg-blue-500/20 text-blue-300 font-medium' : 'text-(--ui-text-tertiary) hover:text-foreground'}`,
-                    children: 'Pro',
+                    className: `rounded px-1.5 py-0.5 ${
+                      tierFilter === 'pro'
+                        ? 'bg-blue-500/20 text-blue-300 font-medium'
+                        : 'text-(--ui-text-tertiary) hover:text-foreground'
+                    }`,
+                    children: tr('limits.tierPro'),
                   }),
                 ],
               }),
@@ -808,7 +1171,7 @@ export default {
                 ? jsxs('div', {
                     className: 'flex items-center gap-1',
                     children: [
-                      jsx('span', { className: 'text-(--ui-text-tertiary)', children: 'PROVIDER:' }),
+                      jsx('span', { className: 'text-(--ui-text-tertiary)', children: tr('limits.filterProvider') }),
                       jsx('select', {
                         value: providerFilter,
                         onChange: (e) => {
@@ -816,12 +1179,13 @@ export default {
                           setProviderFilter(e.target.value)
                         },
                         style: { backgroundColor: '#18181b', color: '#f4f4f5' },
-                        className: 'cursor-pointer rounded border border-(--ui-stroke-secondary) bg-zinc-900 px-2 py-0.5 text-xs text-zinc-100 focus:border-blue-400 focus:outline-none',
+                        className:
+                          'cursor-pointer rounded border border-(--ui-stroke-secondary) bg-zinc-900 px-2 py-0.5 text-xs text-zinc-100 focus:border-blue-400 focus:outline-none',
                         children: [
                           jsx('option', {
                             value: 'all',
                             style: { backgroundColor: '#18181b', color: '#f4f4f5' },
-                            children: `All providers (${accounts.length})`,
+                            children: tr('limits.allProviders', accounts.length),
                           }),
                           ...providerOptions.map((p) => {
                             const count = accounts.filter((a) => a.provider === p).length
@@ -845,7 +1209,10 @@ export default {
 
           // ─── Accounts Grid grouped by Provider ───
           !filtered.length
-            ? jsx('div', { className: 'py-3 text-center text-sm text-(--ui-text-tertiary)', children: 'ไม่พบบัญชีที่ตรงกับเงื่อนไข' })
+            ? jsx('div', {
+                className: 'py-3 text-center text-sm text-(--ui-text-tertiary)',
+                children: tr('limits.noMatch'),
+              })
             : jsxs('div', {
                 className: 'flex flex-col gap-3',
                 children: Object.entries(grouped).map(([provName, provAccounts]) => {
@@ -857,7 +1224,8 @@ export default {
                       children: [
                         // Group Accordion Header
                         jsxs('div', {
-                          className: 'flex items-center justify-between border-b border-(--ui-stroke-secondary) pb-1',
+                          className:
+                            'flex items-center justify-between border-b border-(--ui-stroke-secondary) pb-1',
                           children: [
                             jsxs('div', {
                               className: 'flex items-center gap-1.5 font-medium',
@@ -868,7 +1236,7 @@ export default {
                             }),
                             jsx('span', {
                               className: 'text-xs text-(--ui-text-tertiary)',
-                              children: `${activeInGroup} active / ${provAccounts.length} accounts`,
+                              children: tr('limits.activeAccounts', activeInGroup, provAccounts.length),
                             }),
                           ],
                         }),
@@ -905,28 +1273,36 @@ export default {
                                             className: 'flex items-center gap-1.5',
                                             children: [
                                               jsx('span', { className: `h-2 w-2 rounded-full shrink-0 ${dotColor}` }),
-                                              jsx('span', { className: 'font-semibold truncate capitalize text-sm', children: account.provider }),
                                               jsx('span', {
-                                                className: `rounded-full px-2 py-0.2 text-[0.625rem] font-medium uppercase tracking-wide ${account.isPro ? 'bg-emerald-500/20 text-emerald-300' : 'bg-zinc-500/20 text-zinc-300'}`,
+                                                className: 'font-semibold truncate capitalize text-sm',
+                                                children: account.provider,
+                                              }),
+                                              jsx('span', {
+                                                className: `rounded-full px-2 py-0.2 text-[0.625rem] font-medium uppercase tracking-wide ${
+                                                  account.isPro
+                                                    ? 'bg-emerald-500/20 text-emerald-300'
+                                                    : 'bg-zinc-500/20 text-zinc-300'
+                                                }`,
                                                 children: `● ${account.plan}`,
                                               }),
                                             ],
                                           }),
                                           account.email
                                             ? jsx('span', {
-                                                className: 'font-mono text-xs text-(--ui-text-tertiary) truncate pl-3.5',
+                                                className:
+                                                  'font-mono text-xs text-(--ui-text-tertiary) truncate pl-3.5',
                                                 children: maskEmail(account.email),
                                               })
                                             : null,
                                           account.testStatus === 'expired' || account.lastError
                                             ? jsx('span', {
                                                 className: 'text-xs text-red-400 font-medium pl-3.5',
-                                                children: account.lastError || 'Token expired — กรุณา re-authenticate',
+                                                children: account.lastError || tr('limits.tokenExpired'),
                                               })
                                             : !account.isActive
                                             ? jsx('span', {
                                                 className: 'text-xs text-zinc-400 pl-3.5',
-                                                children: 'สถานะ: Inactive (ปิดใช้งานอยู่)',
+                                                children: tr('limits.inactive'),
                                               })
                                             : null,
                                         ],
@@ -941,11 +1317,14 @@ export default {
                                   // Model Quotas Rows & Progress Bars
                                   account.modelEntries.length > 0
                                     ? jsxs('div', {
-                                        className: 'flex flex-col gap-2 pt-1 border-t border-(--ui-stroke-secondary)/50',
+                                        className:
+                                          'flex flex-col gap-2 pt-1 border-t border-(--ui-stroke-secondary)/50',
                                         children: account.modelEntries.map(([modelKey, qObj]) => {
-                                          const pct = qObj.remainingPercentage ?? (qObj.total ? ((qObj.total - qObj.used) / qObj.total) * 100 : 100)
+                                          const pct =
+                                            qObj.remainingPercentage ??
+                                            (qObj.total ? ((qObj.total - qObj.used) / qObj.total) * 100 : 100)
                                           const barTone = getQuotaTone(pct)
-                                          const countdown = formatCountdown(qObj.resetAt)
+                                          const countdown = formatCountdown(qObj.resetAt, tr)
 
                                           return jsxs(
                                             'div',
@@ -956,16 +1335,22 @@ export default {
                                                 jsxs('div', {
                                                   className: 'flex items-center justify-between gap-2',
                                                   children: [
-                                                    jsx('span', { className: 'font-medium truncate', children: formatModelName(modelKey) }),
+                                                    jsx('span', {
+                                                      className: 'font-medium truncate',
+                                                      children: formatModelName(modelKey),
+                                                    }),
                                                     jsx('span', {
                                                       className: `font-mono font-semibold tabular-nums shrink-0 ${barTone.text}`,
-                                                      children: qObj.unlimited ? 'ไม่จำกัด' : `${Math.round(pct)}% left`,
+                                                      children: qObj.unlimited
+                                                        ? tr('limits.unlimited')
+                                                        : `${Math.round(pct)}% ${tr('limits.left')}`,
                                                     }),
                                                   ],
                                                 }),
                                                 // Progress Bar
                                                 jsx('div', {
-                                                  className: 'h-1.5 w-full rounded-full bg-(--ui-stroke-secondary) overflow-hidden',
+                                                  className:
+                                                    'h-1.5 w-full rounded-full bg-(--ui-stroke-secondary) overflow-hidden',
                                                   children: jsx('div', {
                                                     style: { width: `${Math.min(100, Math.max(0, pct))}%` },
                                                     className: `h-full rounded-full transition-all duration-500 ${barTone.bar}`,
@@ -974,7 +1359,8 @@ export default {
                                                 // Reset countdown
                                                 countdown
                                                   ? jsx('div', {
-                                                      className: 'text-[0.6875rem] font-mono text-(--ui-text-tertiary)',
+                                                      className:
+                                                        'text-[0.6875rem] font-mono text-(--ui-text-tertiary)',
                                                       children: countdown,
                                                     })
                                                   : null,
@@ -985,8 +1371,9 @@ export default {
                                         }),
                                       })
                                     : jsx('div', {
-                                        className: 'text-xs text-(--ui-text-tertiary) pt-1 border-t border-(--ui-stroke-secondary)/50',
-                                        children: 'โควต้า: ตามรอบบิล / ไม่จำกัด',
+                                        className:
+                                          'text-xs text-(--ui-text-tertiary) pt-1 border-t border-(--ui-stroke-secondary)/50',
+                                        children: tr('limits.quotaBilling'),
                                       }),
                                 ],
                               },
@@ -1009,55 +1396,73 @@ export default {
     function LogsSection() {
       const token = useValue($token)
       const q = useLogs()
+      const tr = useT()
       if (!token) return null
       if (q.isLoading) {
-        return jsx(Section, { title: 'Recent Requests', children: jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children: 'กำลังโหลด…' }) })
+        return jsx(Section, {
+          title: tr('logs.title'),
+          children: jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children: tr('common.loading') }),
+        })
       }
       if (q.error) {
-        return jsx(Section, { title: 'Recent Requests', children: jsx('div', { className: 'text-sm', children: ERR_TH[errKey(q.error)] || 'ดูไม่ได้' }) })
+        return jsx(Section, {
+          title: tr('logs.title'),
+          children: jsx('div', { className: 'text-sm', children: getErrorMessage(q.error, tr) }),
+        })
       }
       const logs = Array.isArray(q.data) ? q.data : []
       if (!logs.length) {
-        return jsx(Section, { title: 'Recent Requests', children: jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children: 'ไม่มี request' }) })
+        return jsx(Section, {
+          title: tr('logs.title'),
+          children: jsx('div', { className: 'text-sm text-(--ui-text-tertiary)', children: tr('logs.empty') }),
+        })
       }
       return jsx(Section, {
-        title: `Recent Requests · ${logs.length}`,
+        title: tr('logs.titleWithCount', logs.length),
         children: jsx('div', {
           className: 'flex flex-col gap-1',
           children: logs.map((log, i) =>
-            jsxs('div', {
-              className: 'flex flex-col gap-0.5 rounded-sm border border-(--ui-stroke-secondary) px-2 py-1 text-xs',
-              children: [
-                jsxs('div', {
-                  className: 'flex items-center justify-between gap-2',
-                  children: [
-                    jsx('span', { className: 'truncate font-medium', children: log.model || '—' }),
-                    jsxs('span', {
-                      className: 'shrink-0 font-mono text-(--ui-text-tertiary)',
-                      children: `${statusBadge(log.status)} · ${fmtTime(log.timestamp)}`,
-                    }),
-                  ],
-                }),
-                jsxs('div', {
-                  className: 'flex items-center gap-3 text-(--ui-text-tertiary)',
-                  children: [
-                    jsx('span', { children: log.provider || '—' }),
-                    jsx('span', { children: log.account || '—' }),
-                    jsx('span', { className: 'font-mono', children: fmtDuration(log.duration) }),
-                    (log.tokens && (log.tokens.in || log.tokens.out))
-                      ? jsx('span', { className: 'font-mono', children: `${fmtTokens(log.tokens.in)}→${fmtTokens(log.tokens.out)}` })
-                      : null,
-                  ],
-                }),
-                log.error
-                  ? jsx('div', {
-                      style: { color: 'var(--ui-text-tertiary)' },
-                      className: 'truncate',
-                      children: typeof log.error === 'string' ? log.error : JSON.stringify(log.error),
-                    })
-                  : null,
-              ],
-            }, log.id || i)
+            jsxs(
+              'div',
+              {
+                className:
+                  'flex flex-col gap-0.5 rounded-sm border border-(--ui-stroke-secondary) px-2 py-1 text-xs',
+                children: [
+                  jsxs('div', {
+                    className: 'flex items-center justify-between gap-2',
+                    children: [
+                      jsx('span', { className: 'truncate font-medium', children: log.model || '—' }),
+                      jsxs('span', {
+                        className: 'shrink-0 font-mono text-(--ui-text-tertiary)',
+                        children: `${statusBadge(log.status)} · ${fmtTime(log.timestamp)}`,
+                      }),
+                    ],
+                  }),
+                  jsxs('div', {
+                    className: 'flex items-center gap-3 text-(--ui-text-tertiary)',
+                    children: [
+                      jsx('span', { children: log.provider || '—' }),
+                      jsx('span', { children: log.account || '—' }),
+                      jsx('span', { className: 'font-mono', children: fmtDuration(log.duration) }),
+                      log.tokens && (log.tokens.in || log.tokens.out)
+                        ? jsx('span', {
+                            className: 'font-mono',
+                            children: `${fmtTokens(log.tokens.in)}→${fmtTokens(log.tokens.out)}`,
+                          })
+                        : null,
+                    ],
+                  }),
+                  log.error
+                    ? jsx('div', {
+                        style: { color: 'var(--ui-text-tertiary)' },
+                        className: 'truncate',
+                        children: typeof log.error === 'string' ? log.error : JSON.stringify(log.error),
+                      })
+                    : null,
+                ],
+              },
+              log.id || i
+            )
           ),
         }),
       })
@@ -1066,9 +1471,10 @@ export default {
     /* ─── full page ───────────────────────────────────── */
 
     function StatusPage() {
+      const tr = useT()
       const refresh = () => {
         queryClient.invalidateQueries({ queryKey: [ID] })
-        host.notify({ kind: 'info', message: 'รีเฟรช OmniRoute แล้ว' })
+        host.notify({ kind: 'info', message: tr('common.refreshed') })
       }
       return jsxs('div', {
         className: 'flex h-full flex-col gap-2 overflow-y-auto p-3 text-sm',
@@ -1077,11 +1483,18 @@ export default {
             className: 'flex items-center justify-between',
             children: [
               jsx('div', { className: 'font-medium', children: 'OmniRoute Usage' }),
-              jsx('button', {
-                type: 'button',
-                onClick: refresh,
-                className: 'rounded-sm border border-(--ui-stroke-secondary) px-2 py-0.5 text-xs hover:bg-(--chrome-action-hover)',
-                children: 'รีเฟรช',
+              jsxs('div', {
+                className: 'flex items-center gap-2',
+                children: [
+                  jsx(LangSwitch, {}),
+                  jsx('button', {
+                    type: 'button',
+                    onClick: refresh,
+                    className:
+                      'rounded-sm border border-(--ui-stroke-secondary) px-2 py-0.5 text-xs hover:bg-(--chrome-action-hover)',
+                    children: tr('common.refresh'),
+                  }),
+                ],
               }),
             ],
           }),
@@ -1121,8 +1534,8 @@ export default {
         area: PALETTE_AREA,
         data: {
           id: 'omniroute.open',
-          label: 'OmniRoute: เปิดหน้า Usage',
-          keywords: ['omniroute', 'usage', 'dashboard', 'สถานะ'],
+          label: MESSAGES_EN.palette.openLabel,
+          keywords: ['omniroute', 'usage', 'dashboard', 'สถานะ', 'เปิด'],
           run: () => host.navigate('/omniroute'),
         },
       },
@@ -1131,11 +1544,11 @@ export default {
         area: PALETTE_AREA,
         data: {
           id: 'omniroute.refresh',
-          label: 'OmniRoute: รีเฟรชข้อมูล',
+          label: MESSAGES_EN.palette.refreshLabel,
           keywords: ['omniroute', 'refresh', 'รีเฟรช'],
           run: () => {
             queryClient.invalidateQueries({ queryKey: [ID] })
-            host.notify({ kind: 'info', message: 'รีเฟรช OmniRoute แล้ว' })
+            host.notify({ kind: 'info', message: t('common.refreshed') })
           },
         },
       },
@@ -1144,12 +1557,12 @@ export default {
         area: PALETTE_AREA,
         data: {
           id: 'omniroute.clear',
-          label: 'OmniRoute: ลบ accessToken',
+          label: MESSAGES_EN.palette.clearLabel,
           keywords: ['omniroute', 'token', 'clear', 'ลบ'],
           run: () => {
             setToken('')
             queryClient.invalidateQueries({ queryKey: [ID] })
-            host.notify({ kind: 'info', message: 'ลบ OmniRoute token แล้ว' })
+            host.notify({ kind: 'info', message: t('token.deleted') })
           },
         },
       },

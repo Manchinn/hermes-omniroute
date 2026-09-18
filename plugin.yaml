@@ -1,5 +1,11 @@
 name: omniroute
-version: 1.0.0
+version: "1.0.0"
 description: "OmniRoute usage, provider limits & call logs dashboard for Hermes Desktop"
 author: Manchinn
-kind: standalone
+homepage: https://github.com/Manchinn/hermes-omniroute
+license: MIT
+capabilities:
+  provides_tools: []
+  provides_hooks: []
+  provides_middleware: []
+  requires_env: []
